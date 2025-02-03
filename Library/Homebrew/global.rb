@@ -1,4 +1,4 @@
-# typed: true
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
 require_relative "startup"
@@ -100,7 +100,7 @@ module Homebrew
     end
 
     def owner_uid
-      @owner_uid ||= HOMEBREW_BREW_FILE.stat.uid
+      @owner_uid ||= HOMEBREW_ORIGINAL_BREW_FILE.stat.uid
     end
 
     def running_as_root_but_not_owned_by_root?
@@ -109,6 +109,16 @@ module Homebrew
 
     def auto_update_command?
       ENV.fetch("HOMEBREW_AUTO_UPDATE_COMMAND", false).present?
+    end
+
+    sig { params(cmd: T.nilable(String)).void }
+    def running_command=(cmd)
+      @running_command_with_args = "#{cmd} #{ARGV.join(" ")}"
+    end
+
+    sig { returns String }
+    def running_command_with_args
+      "brew #{@running_command_with_args}".strip
     end
   end
 end

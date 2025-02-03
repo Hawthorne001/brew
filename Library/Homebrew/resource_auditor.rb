@@ -1,4 +1,4 @@
-# typed: true
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
 require "utils/svn"
@@ -91,7 +91,8 @@ module Homebrew
 
     def audit_checksum
       return if spec_name == :head
-      # rubocop:disable Style/InvertibleUnlessCondition (non-invertible)
+      # This condition is non-invertible.
+      # rubocop:disable Style/InvertibleUnlessCondition
       return unless DownloadStrategyDetector.detect(url, using) <= CurlDownloadStrategy
       # rubocop:enable Style/InvertibleUnlessCondition
 
@@ -117,8 +118,10 @@ module Homebrew
         pypi_package_name, = File.basename(path).split("-", 2)
       else
         url =~ %r{/(?<package_name>[^/]+)-}
-        pypi_package_name = Regexp.last_match(:package_name).to_s.gsub(/[_.]/, "-")
+        pypi_package_name = Regexp.last_match(:package_name).to_s
       end
+
+      T.must(pypi_package_name).gsub!(/[_.]/, "-")
 
       return if name.casecmp(pypi_package_name).zero?
 

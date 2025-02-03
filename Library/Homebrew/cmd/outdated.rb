@@ -1,4 +1,4 @@
-# typed: true
+# typed: strict
 # frozen_string_literal: true
 
 require "abstract_command"
@@ -62,13 +62,14 @@ module Homebrew
           end
 
           json = {
-            "formulae" => json_info(formulae),
-            "casks"    => json_info(casks),
+            formulae: json_info(formulae),
+            casks:    json_info(casks),
           }
-          puts JSON.pretty_generate(json)
+          # json v2.8.1 is inconsistent it how it renders empty arrays,
+          # so we use `[]` for consistency:
+          puts JSON.pretty_generate(json).gsub(/\[\n\n\s*\]/, "[]")
 
           outdated = formulae + casks
-
         else
           outdated = if args.formula?
             outdated_formulae
@@ -86,6 +87,7 @@ module Homebrew
 
       private
 
+      sig { params(formulae_or_casks: T::Array[T.any(Formula, Cask::Cask)]).void }
       def print_outdated(formulae_or_casks)
         formulae_or_casks.each do |formula_or_cask|
           if formula_or_cask.is_a?(Formula)
@@ -124,6 +126,13 @@ module Homebrew
         end
       end
 
+      sig {
+        params(
+          formulae_or_casks: T::Array[T.any(Formula, Cask::Cask)],
+        ).returns(
+          T::Array[T.any(T::Hash[String, T.untyped], T::Hash[String, T.untyped])],
+        )
+      }
       def json_info(formulae_or_casks)
         formulae_or_casks.map do |formula_or_cask|
           if formula_or_cask.is_a?(Formula)
@@ -149,10 +158,12 @@ module Homebrew
         end
       end
 
+      sig { returns(T::Boolean) }
       def verbose?
         ($stdout.tty? || Context.current.verbose?) && !Context.current.quiet?
       end
 
+      sig { params(version: T.nilable(T.any(TrueClass, String))).returns(T.nilable(Symbol)) }
       def json_version(version)
         version_hash = {
           nil  => nil,
@@ -160,24 +171,29 @@ module Homebrew
           "v1" => :v1,
           "v2" => :v2,
         }
-
-        raise UsageError, "invalid JSON version: #{version}" unless version_hash.include?(version)
-
-        version_hash[version]
+        version_hash.fetch(version) { raise UsageError, "invalid JSON version: #{version}" }
       end
 
+      sig { returns(T::Array[Formula]) }
       def outdated_formulae
-        select_outdated((args.named.to_resolved_formulae.presence || Formula.installed)).sort
+        T.cast(
+          select_outdated((args.named.to_resolved_formulae.presence || Formula.installed)).sort,
+          T::Array[Formula],
+        )
       end
 
+      sig { returns(T::Array[Cask::Cask]) }
       def outdated_casks
-        if args.named.present?
+        outdated = if args.named.present?
           select_outdated(args.named.to_casks)
         else
           select_outdated(Cask::Caskroom.casks)
         end
+
+        T.cast(outdated, T::Array[Cask::Cask])
       end
 
+      sig { returns([T::Array[T.any(Formula, Cask::Cask)], T::Array[T.any(Formula, Cask::Cask)]]) }
       def outdated_formulae_casks
         formulae, casks = args.named.to_resolved_formulae_to_casks
 
@@ -189,6 +205,9 @@ module Homebrew
         [select_outdated(formulae).sort, select_outdated(casks)]
       end
 
+      sig {
+        params(formulae_or_casks: T::Array[T.any(Formula, Cask::Cask)]).returns(T::Array[T.any(Formula, Cask::Cask)])
+      }
       def select_outdated(formulae_or_casks)
         formulae_or_casks.select do |formula_or_cask|
           if formula_or_cask.is_a?(Formula)

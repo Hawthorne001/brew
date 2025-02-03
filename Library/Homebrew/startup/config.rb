@@ -4,6 +4,11 @@
 raise "HOMEBREW_BREW_FILE was not exported! Please call bin/brew directly!" unless ENV["HOMEBREW_BREW_FILE"]
 
 # Path to `bin/brew` main executable in `HOMEBREW_PREFIX`
+# Used for e.g. permissions checks.
+HOMEBREW_ORIGINAL_BREW_FILE = Pathname(ENV.fetch("HOMEBREW_ORIGINAL_BREW_FILE")).freeze
+
+# Path to the executable that should be used to run `brew`.
+# This may be HOMEBREW_ORIGINAL_BREW_FILE or HOMEBREW_BREW_WRAPPER.
 HOMEBREW_BREW_FILE = Pathname(ENV.fetch("HOMEBREW_BREW_FILE")).freeze
 
 # Where we link under
@@ -50,6 +55,9 @@ HOMEBREW_TEMP = Pathname(ENV.fetch("HOMEBREW_TEMP")).then do |tmp|
   tmp.mkpath unless tmp.exist?
   tmp.realpath
 end.freeze
+
+# Where installed taps live
+HOMEBREW_TAP_DIRECTORY = (HOMEBREW_LIBRARY/"Taps").freeze
 
 # The Ruby path and args to use for forked Ruby calls
 HOMEBREW_RUBY_EXEC_ARGS = [

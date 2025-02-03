@@ -1,4 +1,4 @@
-# typed: true
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
 require "warnings"
@@ -25,6 +25,7 @@ module Ignorable
       def raise(*)
         callcc do |continuation|
           super
+        # Handle all possible exceptions.
         rescue Exception => e # rubocop:disable Lint/RescueException
           unless e.is_a?(ScriptError)
             e.extend(ExceptionMixin)

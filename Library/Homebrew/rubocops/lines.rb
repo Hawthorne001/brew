@@ -1,4 +1,4 @@
-# typed: true
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
 require "macos_version"
@@ -214,6 +214,43 @@ module RuboCop
         end
       end
 
+      # This cop makes sure that formulae use `std_npm_args` instead of older
+      # `local_npm_install_args` and `std_npm_install_args`.
+      class StdNpmArgs < FormulaCop
+        extend AutoCorrector
+
+        sig { override.params(formula_nodes: FormulaNodes).void }
+        def audit_formula(formula_nodes)
+          return if (body_node = formula_nodes.body_node).nil?
+
+          find_method_with_args(body_node, :local_npm_install_args) do
+            problem "Use 'std_npm_args' instead of '#{@offensive_node.method_name}'." do |corrector|
+              corrector.replace(@offensive_node.source_range, "std_npm_args(prefix: false)")
+            end
+          end
+
+          find_method_with_args(body_node, :std_npm_install_args) do |method|
+            problem "Use 'std_npm_args' instead of '#{@offensive_node.method_name}'." do |corrector|
+              if (param = parameters(method).first.source) == "libexec"
+                corrector.replace(@offensive_node.source_range, "std_npm_args")
+              else
+                corrector.replace(@offensive_node.source_range, "std_npm_args(prefix: #{param})")
+              end
+            end
+          end
+
+          find_every_method_call_by_name(body_node, :system).each do |method|
+            first_param, second_param = parameters(method)
+            next if !node_equals?(first_param, "npm") ||
+                    !node_equals?(second_param, "install") ||
+                    method.source.match(/(std_npm_args|local_npm_install_args|std_npm_install_args)/)
+
+            offending_node(method)
+            problem "Use `std_npm_args` for npm install"
+          end
+        end
+      end
+
       # This cop makes sure that formulae depend on `openssl` instead of `quictls`.
       class QuicTLSCheck < FormulaCop
         extend AutoCorrector
@@ -301,8 +338,7 @@ module RuboCop
               good_args = "Utils.#{command}({ \"#{match[1]}\" => \"#{match[2]}\" }, \"#{match[3]}\")"
 
               problem "Use `#{good_args}` instead of `#{method.source}`" do |corrector|
-                corrector.replace(@offensive_node.source_range,
-                                  "{ \"#{match[1]}\" => \"#{match[2]}\" }, \"#{match[3]}\"")
+                corrector.replace(method.source_range, good_args)
               end
             end
           end
@@ -750,18 +786,6 @@ module RuboCop
             problem "Use ruby-macho instead of calling #{@offensive_node.source}"
           end
 
-          find_every_method_call_by_name(body_node, :system).each do |method_node|
-            # Skip Kibana: npm cache edge (see formula for more details)
-            next if @formula_name.match?(/^kibana(@\d[\d.]*)?$/)
-
-            first_param, second_param = parameters(method_node)
-            next if !node_equals?(first_param, "npm") ||
-                    !node_equals?(second_param, "install")
-
-            offending_node(method_node)
-            problem "Use Language::Node for npm install args" unless languageNodeModule?(method_node)
-          end
-
           problem "Use new-style test definitions (test do)" if find_method_def(body_node, :test)
 
           find_method_with_args(body_node, :skip_clean, :all) do
@@ -855,11 +879,6 @@ module RuboCop
         def_node_search :formula_path_strings, <<~EOS
           {(dstr (begin (send nil? %1)) $(str _ ))
            (dstr _ (begin (send nil? %1)) $(str _ ))}
-        EOS
-
-        # Node Pattern search for Language::Node
-        def_node_search :languageNodeModule?, <<~EOS
-          (const (const nil? :Language) :Node)
         EOS
       end
     end

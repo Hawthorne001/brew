@@ -6,6 +6,7 @@ require "formula_installer"
 
 RSpec::Matchers.define_negated_matcher :be_a_failure, :be_a_success
 
+# These shared contexts starting with `when` don't make sense.
 RSpec.shared_context "integration test" do # rubocop:disable RSpec/ContextWording
   extend RSpec::Matchers::DSL
 
@@ -202,7 +203,7 @@ RSpec.shared_context "integration test" do # rubocop:disable RSpec/ContextWordin
 
   def install_test_formula(name, content = nil, build_bottle: false)
     setup_test_formula(name, content)
-    fi = FormulaInstaller.new(Formula[name], build_bottle:)
+    fi = FormulaInstaller.new(Formula[name], build_bottle:, installed_on_request: true)
     fi.prelude
     fi.fetch
     fi.install
@@ -210,7 +211,7 @@ RSpec.shared_context "integration test" do # rubocop:disable RSpec/ContextWordin
   end
 
   def setup_test_tap
-    path = Tap::TAP_DIRECTORY/"homebrew/homebrew-foo"
+    path = HOMEBREW_TAP_DIRECTORY/"homebrew/homebrew-foo"
     path.mkpath
     path.cd do
       system "git", "init"
