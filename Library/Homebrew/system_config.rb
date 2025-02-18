@@ -1,4 +1,4 @@
-# typed: true
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
 require "hardware"
@@ -32,6 +32,11 @@ module SystemConfig
     sig { returns(GitRepository) }
     def homebrew_repo
       GitRepository.new(HOMEBREW_REPOSITORY)
+    end
+
+    sig { returns(String) }
+    def branch
+      homebrew_repo.branch_name || "(none)"
     end
 
     sig { returns(String) }
@@ -142,6 +147,7 @@ module SystemConfig
       out.puts "ORIGIN: #{origin}"
       out.puts "HEAD: #{head}"
       out.puts "Last commit: #{last_commit}"
+      out.puts "Branch: #{branch}"
     end
 
     def homebrew_env_config(out = $stdout)

@@ -1,4 +1,4 @@
-# typed: true
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
 require "context"
@@ -30,6 +30,7 @@ module Homebrew
     _system(cmd, *args, **options)
   end
 
+  # `Module` and `Regexp` are global variables used as types here so they don't need to be imported
   # rubocop:disable Style/GlobalVars
   sig { params(the_module: Module, pattern: Regexp).void }
   def self.inject_dump_stats!(the_module, pattern)

@@ -16,9 +16,6 @@ module Homebrew
     HOMEBREW_CORE_REPO = "Homebrew/homebrew-core"
 
     # @api private
-    GH_ATTESTATION_MIN_VERSION = T.let(Version.new("2.49.0").freeze, Version)
-
-    # @api private
     BACKFILL_REPO = "trailofbits/homebrew-brew-verify"
 
     # No backfill attestations after this date are considered valid.
@@ -55,6 +52,12 @@ module Homebrew
     # @api private
     class GhAuthInvalid < RuntimeError; end
 
+    # Raised if attestation verification cannot continue due to `gh`
+    # being incompatible with attestations, typically because it's too old.
+    #
+    # @api private
+    class GhIncompatible < RuntimeError; end
+
     # Returns whether attestation verification is enabled.
     #
     # @api private
@@ -62,11 +65,11 @@ module Homebrew
     def self.enabled?
       return false if Homebrew::EnvConfig.no_verify_attestations?
       return true if Homebrew::EnvConfig.verify_attestations?
-      return false if GitHub::API.credentials.blank?
       return false if ENV.fetch("CI", false)
       return false if OS.unsupported_configuration?
 
-      Homebrew::EnvConfig.developer? || Homebrew::EnvConfig.devcmdrun?
+      # Always check credentials last to avoid unnecessary credential extraction.
+      (Homebrew::EnvConfig.developer? || Homebrew::EnvConfig.devcmdrun?) && GitHub::API.credentials.present?
     end
 
     # Returns a path to a suitable `gh` executable for attestation verification.
@@ -74,25 +77,14 @@ module Homebrew
     # @api private
     sig { returns(Pathname) }
     def self.gh_executable
-      # NOTE: We set HOMEBREW_NO_VERIFY_ATTESTATIONS when installing `gh` itself,
-      #       to prevent a cycle during bootstrapping. This can eventually be resolved
-      #       by vendoring a pure-Ruby Sigstore verifier client.
       @gh_executable ||= T.let(nil, T.nilable(Pathname))
       return @gh_executable if @gh_executable.present?
 
+      # NOTE: We set HOMEBREW_NO_VERIFY_ATTESTATIONS when installing `gh` itself,
+      #       to prevent a cycle during bootstrapping. This can eventually be resolved
+      #       by vendoring a pure-Ruby Sigstore verifier client.
       with_env(HOMEBREW_NO_VERIFY_ATTESTATIONS: "1") do
-        @gh_executable = ensure_executable!("gh", reason: "verifying attestations")
-
-        gh_version = Version.new(system_command!(@gh_executable, args: ["--version"], print_stderr: false)
-                                 .stdout.match(/\d+(?:\.\d+)+/i).to_s)
-        if gh_version < GH_ATTESTATION_MIN_VERSION
-          if Formula["gh"].version < GH_ATTESTATION_MIN_VERSION
-            raise "#{@gh_executable} is too old, you must upgrade it to >=#{GH_ATTESTATION_MIN_VERSION} to continue"
-          end
-
-          @gh_executable = ensure_formula_installed!("gh", latest: true,
-                                                           reason: "verifying attestations").opt_bin/"gh"
-        end
+        @gh_executable = ensure_executable!("gh", reason: "verifying attestations", latest: true)
       end
 
       T.must(@gh_executable)
@@ -150,6 +142,10 @@ module Homebrew
                                  env: { "GH_TOKEN" => credentials, "GH_HOST" => "github.com" },
                                  secrets: [credentials], print_stderr: false, chdir: HOMEBREW_TEMP)
       rescue ErrorDuringExecution => e
+        if e.status.exitstatus == 1 && e.stderr.include?("unknown command")
+          raise GhIncompatible, "gh CLI is incompatible with attestations"
+        end
+
         # Even if we have credentials, they may be invalid or malformed.
         if e.status.exitstatus == 4 || e.stderr.include?("HTTP 401: Bad credentials")
           raise GhAuthInvalid, "invalid credentials"
@@ -168,7 +164,12 @@ module Homebrew
 
       # `gh attestation verify` returns a JSON array of one or more results,
       # for all attestations that match the input's digest. We want to additionally
-      # filter these down to just the attestation whose subject matches the bottle's name.
+      # filter these down to just the attestation whose subject(s) contain the bottle's name.
+      # As of 2024-12-04 GitHub's Artifact Attestation feature can put multiple subjects
+      # in a single attestation, so we check every subject in each attestation
+      # and select the first attestation with a matching subject.
+      # In particular, this happens with v2.0.0 and later of the
+      # `actions/attest-build-provenance` action.
       subject = bottle.filename.to_s if subject.blank?
 
       attestation = if bottle.tag.to_sym == :all
@@ -179,19 +180,24 @@ module Homebrew
         # This is sound insofar as the signature has already been verified. However,
         # longer term, we should also directly attest to `:all`-tagged bottles.
         attestations.find do |a|
-          actual_subject = a.dig("verificationResult", "statement", "subject", 0, "name")
-          actual_subject.start_with? "#{bottle.filename.name}--#{bottle.filename.version}"
+          candidate_subjects = a.dig("verificationResult", "statement", "subject")
+          candidate_subjects.any? do |candidate|
+            candidate["name"].start_with? "#{bottle.filename.name}--#{bottle.filename.version}"
+          end
         end
       else
         attestations.find do |a|
-          a.dig("verificationResult", "statement", "subject", 0, "name") == subject
+          candidate_subjects = a.dig("verificationResult", "statement", "subject")
+          candidate_subjects.any? { |candidate| candidate["name"] == subject }
         end
       end
 
-      raise InvalidAttestationError, "no attestation matches subject" if attestation.blank?
+      raise InvalidAttestationError, "no attestation matches subject: #{subject}" if attestation.blank?
 
       attestation
     end
+
+    ATTESTATION_MAX_RETRIES = 5
 
     # Verifies the given bottle against a cryptographic attestation of build provenance
     # from homebrew-core's CI, falling back on a "backfill" attestation for older bottles.
@@ -227,7 +233,17 @@ module Homebrew
         # This was originally unintentional, but has a virtuous side effect of further
         # limiting domain separation on the backfilled signatures (by committing them to
         # their original bottle URLs).
-        url_sha256 = Digest::SHA256.hexdigest(bottle.url)
+        url_sha256 = if EnvConfig.bottle_domain == HOMEBREW_BOTTLE_DEFAULT_DOMAIN
+          Digest::SHA256.hexdigest(bottle.url)
+        else
+          # If our bottle is coming from a mirror, we need to recompute the expected
+          # non-mirror URL to make the hash match.
+          path, = Utils::Bottles.path_resolved_basename HOMEBREW_BOTTLE_DEFAULT_DOMAIN, bottle.name,
+                                                        bottle.resource.checksum, bottle.filename
+          url = "#{HOMEBREW_BOTTLE_DEFAULT_DOMAIN}/#{path}"
+
+          Digest::SHA256.hexdigest(url)
+        end
         subject = "#{url_sha256}--#{bottle.filename}"
 
         # We don't pass in a signing workflow for backfill signatures because
@@ -250,6 +266,15 @@ module Homebrew
       end
 
       backfill_attestation
+    rescue InvalidAttestationError
+      @attestation_retry_count ||= T.let(Hash.new(0), T.nilable(T::Hash[Bottle, Integer]))
+      raise if @attestation_retry_count[bottle] >= ATTESTATION_MAX_RETRIES
+
+      sleep_time = 3 ** @attestation_retry_count[bottle]
+      opoo "Failed to verify attestation. Retrying in #{sleep_time}s..."
+      sleep sleep_time if ENV["HOMEBREW_TESTS"].blank?
+      @attestation_retry_count[bottle] += 1
+      retry
     end
   end
 end

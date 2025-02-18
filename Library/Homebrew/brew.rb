@@ -48,7 +48,7 @@ begin
   ARGV.delete_at(help_cmd_index) if help_cmd_index
 
   require "cli/parser"
-  args = Homebrew::CLI::Parser.new.parse(ARGV.dup.freeze, ignore_invalid_options: true)
+  args = Homebrew::CLI::Parser.new(Homebrew::Cmd::Brew).parse(ARGV.dup.freeze, ignore_invalid_options: true)
   Context.current = args.context
 
   path = PATH.new(ENV.fetch("PATH"))
@@ -61,14 +61,13 @@ begin
   ENV["PATH"] = path.to_s
 
   require "commands"
+  require "warnings"
 
   internal_cmd = Commands.valid_internal_cmd?(cmd) || Commands.valid_internal_dev_cmd?(cmd) if cmd
 
   unless internal_cmd
-    require "tap"
-
     # Add contributed commands to PATH before checking.
-    homebrew_path.append(Tap.cmd_directories)
+    homebrew_path.append(Commands.tap_cmd_directories)
 
     # External commands expect a normal PATH
     ENV["PATH"] = homebrew_path.to_s
@@ -87,6 +86,7 @@ begin
   if internal_cmd || Commands.external_ruby_v2_cmd_path(cmd)
     cmd = T.must(cmd)
     cmd_class = Homebrew::AbstractCommand.command(cmd)
+    Homebrew.running_command = cmd
     if cmd_class
       command_instance = cmd_class.new
 
@@ -94,9 +94,19 @@ begin
       Utils::Analytics.report_command_run(command_instance)
       command_instance.run
     else
-      Homebrew.public_send Commands.method_name(cmd)
+      begin
+        Homebrew.public_send Commands.method_name(cmd)
+      rescue NoMethodError => e
+        converted_cmd = cmd.downcase.tr("-", "_")
+        case_error = "undefined method `#{converted_cmd}' for module Homebrew"
+        private_method_error = "private method `#{converted_cmd}' called for module Homebrew"
+        odie "Unknown command: brew #{cmd}" if [case_error, private_method_error].include?(e.message)
+
+        raise
+      end
     end
   elsif (path = Commands.external_ruby_cmd_path(cmd))
+    Homebrew.running_command = cmd
     require?(path)
     exit Homebrew.failed? ? 1 : 0
   elsif Commands.external_cmd_path(cmd)
@@ -144,7 +154,7 @@ begin
   end
 rescue UsageError => e
   require "help"
-  Homebrew::Help.help cmd, remaining_args: args&.remaining, usage_error: e.message
+  Homebrew::Help.help cmd, remaining_args: args&.remaining || [], usage_error: e.message
 rescue SystemExit => e
   onoe "Kernel.exit" if args&.debug? && !e.success?
   if args&.debug? || ARGV.include?("--debug")
@@ -193,6 +203,7 @@ rescue RuntimeError, SystemCallError => e
   end
 
   exit 1
+# Catch any other types of exceptions.
 rescue Exception => e # rubocop:disable Lint/RescueException
   onoe e
 

@@ -1,4 +1,4 @@
-# typed: true
+# typed: strict
 # frozen_string_literal: true
 
 require "rubocops/extend/formula_cop"
@@ -62,6 +62,10 @@ module RuboCop
             problem %q(use "xcodebuild *args" instead of "system 'xcodebuild', *args")
           end
 
+          if !depends_on?(:xcode) && method_called_ever?(body_node, :xcodebuild)
+            problem "`xcodebuild` needs an Xcode dependency"
+          end
+
           if (method_node = find_method_def(body_node, :install))
             find_method_with_args(method_node, :system, "go", "get") do
               problem "Do not use `go get`. Please ask upstream to implement Go vendoring"
@@ -115,6 +119,8 @@ module RuboCop
     module FormulaAuditStrict
       # This cop contains stricter checks for various problems in a formula's source code.
       class Text < FormulaCop
+        extend AutoCorrector
+
         sig { override.params(formula_nodes: FormulaNodes).void }
         def audit_formula(formula_nodes)
           return if (body_node = formula_nodes.body_node).nil?
@@ -127,7 +133,7 @@ module RuboCop
             problem "`env :userpaths` in homebrew/core formulae is deprecated"
           end
 
-          share_path_starts_with(body_node, @formula_name) do |share_node|
+          share_path_starts_with(body_node, T.must(@formula_name)) do |share_node|
             offending_node(share_node)
             problem "Use `pkgshare` instead of `share/\"#{@formula_name}\"`"
           end
@@ -138,9 +144,13 @@ module RuboCop
           end
 
           interpolated_bin_path_starts_with(body_node, "/#{@formula_name}") do |bin_node|
+            next if bin_node.ancestors.any?(&:array_type?)
+
             offending_node(bin_node)
             cmd = bin_node.source.match(%r{\#{bin}/(\S+)})[1]&.delete_suffix('"') || @formula_name
-            problem "Use `bin/\"#{cmd}\"` instead of `\"\#{bin}/#{cmd}\"`"
+            problem "Use `bin/\"#{cmd}\"` instead of `\"\#{bin}/#{cmd}\"`" do |corrector|
+              corrector.replace(bin_node.loc.expression, "bin/\"#{cmd}\"")
+            end
           end
 
           return if formula_tap != "homebrew-core"
@@ -152,12 +162,16 @@ module RuboCop
 
         # Check whether value starts with the formula name and then a "/", " " or EOS.
         # If we're checking for "#{bin}", we also check for "-" since similar binaries also don't need interpolation.
+        sig { params(path: String, starts_with: String, bin: T::Boolean).returns(T::Boolean) }
         def path_starts_with?(path, starts_with, bin: false)
           ending = bin ? "/|-|$" : "/| |$"
           path.match?(/^#{Regexp.escape(starts_with)}(#{ending})/)
         end
 
+        sig { params(path: String, starts_with: String).returns(T::Boolean) }
         def path_starts_with_bin?(path, starts_with)
+          return false if path.include?(" ")
+
           path_starts_with?(path, starts_with, bin: true)
         end
 

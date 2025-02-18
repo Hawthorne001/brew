@@ -1,4 +1,4 @@
-# typed: true
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
 module RuboCop
@@ -7,6 +7,7 @@ module RuboCop
       class ArrayAlphabetization < Base
         extend AutoCorrector
 
+        sig { params(node: RuboCop::AST::SendNode).void }
         def on_send(node)
           return unless [:zap, :uninstall].include?(node.method_name)
 

@@ -1,4 +1,4 @@
-# typed: true
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
 require "rubocops/shared/helper_functions"
@@ -97,7 +97,8 @@ module RuboCop
                                                %r{^http://hackage\.haskell\.org/},
                                                %r{^http://(?:[^/]*\.)?archive\.org},
                                                %r{^http://(?:[^/]*\.)?freedesktop\.org},
-                                               %r{^http://(?:[^/]*\.)?mirrorservice\.org/}])
+                                               %r{^http://(?:[^/]*\.)?mirrorservice\.org/},
+                                               %r{^http://downloads?\.sourceforge\.net/}])
         audit_urls(urls, http_to_https_patterns) do |_, url, index|
           # It's fine to have a plain HTTP mirror further down the mirror list.
           https_url = url.dup.insert(4, "s")
@@ -153,7 +154,7 @@ module RuboCop
 
           problem "Don't use /download in SourceForge urls (url is #{url})." if url.end_with?("/download")
 
-          if url.match?(%r{^https?://sourceforge\.}) && url != livecheck_url
+          if url.match?(%r{^https?://(sourceforge|sf)\.}) && url != livecheck_url
             problem "Use https://downloads.sourceforge.net to get geolocation (url is #{url})."
           end
 
@@ -165,7 +166,10 @@ module RuboCop
             problem "Don't use specific dl mirrors in SourceForge urls (url is #{url})."
           end
 
-          problem "Please use https:// for #{url}" if url.start_with? "http://downloads"
+          # sf.net does HTTPS -> HTTP redirects.
+          if url.match?(%r{^https?://downloads?\.sf\.net})
+            problem "Use https://downloads.sourceforge.net instead of downloads.sf.net (url is #{url})"
+          end
         end
 
         # Debian has an abundance of secure mirrors. Let's not pluck the insecure
@@ -241,7 +245,7 @@ module RuboCop
         audit_urls(urls, zip_gh_pattern) do |_, url|
           next if url.match? %r{raw.githubusercontent.com/.*/.*/(main|master|HEAD)/}
           next if url.include?("releases/download")
-          next if url.include?("desktop.githubusercontent.com/github-desktop/releases/")
+          next if url.include?("desktop.githubusercontent.com/releases/")
 
           problem "Use GitHub tarballs rather than zipballs (url is #{url})."
         end
